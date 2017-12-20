@@ -20,8 +20,7 @@ namespace PdfExtractionStrategies
         /// <summary>
         /// Exactly from pdf metadata
         /// </summary>
-        private Vector moveTo;
-        private Vector lineTo;
+        private Queue<Tuple<int, Vector>> movements = new Queue<Tuple<int, Vector>>();
         private IList<float> rData;
 
         /// <summary>
@@ -41,17 +40,15 @@ namespace PdfExtractionStrategies
             {
                 var x = renderInfo.SegmentData[0];
                 var y = renderInfo.SegmentData[1];
-                moveTo = new Vector(x, y, 1);
-                lineTo = null;
+                var moveTo = new Vector(x, y, 1);
+                movements.Enqueue(Tuple.Create(1, moveTo));
             }
             else if (renderInfo.Operation == 2)
             {
                 var x = renderInfo.SegmentData[0];
                 var y = renderInfo.SegmentData[1];
-                if (moveTo != null)
-                {
-                    lineTo = new Vector(x, y, 1);
-                }
+                var lineTo = new Vector(x, y, 1);
+                movements.Enqueue(Tuple.Create(2, lineTo));
             }
             else if (renderInfo.Operation == 7)
             {
@@ -61,23 +58,36 @@ namespace PdfExtractionStrategies
 
         public Path RenderPath(PathPaintingRenderInfo renderInfo)
         {
-            if (moveTo != null && lineTo != null && renderInfo.Operation != 0)
+            if (renderInfo.Operation != 0)
             {
-                var from = moveTo.Cross(renderInfo.Ctm);
-                var to = lineTo.Cross(renderInfo.Ctm);
-                var extent = to.Subtract(from);
-                if (extent[0] >= 0)
+                Tuple<int, Vector> cur = null;
+                Vector from = null;
+                Vector to = null;
+                while (movements.Count > 0 && (cur = movements.Dequeue()) != null)
                 {
-                    Lines.Add(new LineSegment(new Vector(FixAxis(from[0]), FixAxis(from[1]), 1)
-                        , new Vector(FixAxis(to[0]), FixAxis(to[1]), 1)));
+                    if (cur.Item1 == 1)
+                    {
+                        from = cur.Item2;
+                    }
+                    else
+                    {
+                        from = from.Cross(renderInfo.Ctm);
+                        to = cur.Item2.Cross(renderInfo.Ctm);
+                        var extent = to.Subtract(from);
+                        if (extent[0] >= 0)
+                        {
+                            Lines.Add(new LineSegment(new Vector(FixAxis(from[0]), FixAxis(from[1]), 1)
+                                , new Vector(FixAxis(to[0]), FixAxis(to[1]), 1)));
+                        }
+                        else
+                        {
+                            Lines.Add(new LineSegment(new Vector(FixAxis(to[0]), FixAxis(to[1]), 1)
+                                , new Vector(FixAxis(from[0]), FixAxis(from[1]), 1)));
+                        }
+                        from = null;
+                        to = null;
+                    }
                 }
-                else
-                {
-                    Lines.Add(new LineSegment(new Vector(FixAxis(to[0]), FixAxis(to[1]), 1)
-                        , new Vector(FixAxis(from[0]), FixAxis(from[1]), 1)));
-                }
-                moveTo = null;
-                lineTo = null;
             }
 
             if (rData != null)
