@@ -67,11 +67,12 @@ namespace PdfExtractionStrategies
                 {
                     if (cur.Item1 == 1)
                     {
-                        from = cur.Item2;
+                        from = cur.Item2.Cross(renderInfo.Ctm);
                     }
                     else
                     {
-                        from = from.Cross(renderInfo.Ctm);
+                        if (from == null) continue;
+
                         to = cur.Item2.Cross(renderInfo.Ctm);
                         var extent = to.Subtract(from);
                         if (extent[0] >= 0)
@@ -95,9 +96,19 @@ namespace PdfExtractionStrategies
                 var r = rData;
                 Vector vxy = new Vector(r[0], r[1], 1).Cross(renderInfo.Ctm);
                 Vector vwh = new Vector(r[2], r[3], 1).Cross(renderInfo.Ctm);
-                var rect = new Rectangle(vxy[0], vxy[1], vwh[0], vwh[1]);
+                var x = vxy[0];
+                var y = vxy[1];
+                if (vwh[0] < 0)
+                {
+                    x = vxy[0] + vwh[0];
+                }
+                if (vwh[1] < 0)
+                {
+                    y = vxy[1] - vwh[1];
+                }
+                vxy = new Vector(x, y, 1);
+                vwh = new Vector(Math.Abs(r[2]), Math.Abs(r[3]), 1).Cross(renderInfo.Ctm);
                 Rects.Add(new Rect(vxy[0], vxy[1], vwh[0], vwh[1]));
-                Debug.WriteLine(renderInfo.Ctm.ToString());
                 rData = null;
             }
 
@@ -120,7 +131,6 @@ namespace PdfExtractionStrategies
                 points.Add(new PointF(rect.Left, rect.Bottom - rect.Height));
                 points.Add(new PointF(rect.Left + rect.Width, rect.Bottom));
                 points.Add(new PointF(rect.Left + rect.Width, rect.Bottom - rect.Height));
-
             }
             // Threshold
             points = points.Select(p =>
@@ -144,6 +154,73 @@ namespace PdfExtractionStrategies
                 var rects = MakeRectangles(g);
                 yield return MakeTable(rects);
             }
+        }
+
+        public List<LineSegment> GetAllInLines()
+        {
+            var lines = new List<LineSegment>();
+            lines.AddRange(Lines);
+            foreach (var rect in Rects)
+            {
+                lines.Add(new LineSegment(new Vector(rect.Left, rect.Top, 1), new Vector(rect.Right, rect.Top, 1)));
+                lines.Add(new LineSegment(new Vector(rect.Left, rect.Top + rect.Height, 1), new Vector(rect.Right, rect.Top + rect.Height, 1)));
+                lines.Add(new LineSegment(new Vector(rect.Left, rect.Top, 1), new Vector(rect.Left, rect.Top + rect.Height, 1)));
+                lines.Add(new LineSegment(new Vector(rect.Right, rect.Top, 1), new Vector(rect.Right, rect.Top + rect.Height, 1)));
+            }
+
+            return lines;
+        }
+
+        public List<PointF> GetAllInPoints()
+        {
+            var points = new List<PointF>();
+            foreach (var line in Lines)
+            {
+                points.Add(new PointF(line.GetStartPoint()[0], line.GetStartPoint()[1]));
+                points.Add(new PointF(line.GetEndPoint()[0], line.GetEndPoint()[1]));
+            }
+            foreach (var rect in Rects)
+            {
+                points.Add(new PointF(rect.Left, rect.Bottom));
+                points.Add(new PointF(rect.Left, rect.Top));
+                points.Add(new PointF(rect.Right, rect.Bottom));
+                points.Add(new PointF(rect.Right, rect.Top));
+            }
+
+            //var lines = GetAllInLines();
+            //for (int i = 0; i < lines.Count - 1; i++)
+            //{
+            //    for (int j = i + 1; j < lines.Count; j++)
+            //    {
+            //        // 1:vertical, 0:horiztonal
+            //        var lineTypei = lines[i].GetStartPoint()[0] == lines[i].GetEndPoint()[0] ? 1 : 0;
+            //        var lineTypej = lines[j].GetStartPoint()[0] == lines[j].GetEndPoint()[0] ? 1 : 0;
+            //        if (lineTypei == lineTypej) continue;
+            //        else {
+            //            var vx = lineTypei == 1 ? lines[i].GetStartPoint()[0] : lines[j].GetStartPoint()[0];
+            //            var vy = lineTypei == 0 ? lines[i].GetStartPoint()[1] : lines[j].GetStartPoint()[1];
+
+            //            if (lineTypei == 1)
+            //            {
+            //                if ((lines[j].GetStartPoint()[0] + lines[j].GetEndPoint()[0]) / 2 > vx
+            //                    && (lines[i].GetStartPoint()[1] + lines[i].GetEndPoint()[1]) / 2 > vy)
+            //                {
+            //                    points.Add(new PointF(vx, vy));
+            //                }
+            //            }
+            //            else
+            //            {
+            //                if ((lines[i].GetStartPoint()[0] + lines[i].GetEndPoint()[0]) / 2 > vx
+            //                    && (lines[j].GetStartPoint()[1] + lines[j].GetEndPoint()[1]) / 2 > vy)
+            //                {
+            //                    points.Add(new PointF(vx, vy));
+            //                }
+            //            }
+            //        }
+            //    }
+            //}
+
+            return points;
         }
 
         // Helper methods
