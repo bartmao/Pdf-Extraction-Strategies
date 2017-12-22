@@ -74,17 +74,25 @@ namespace PdfExtractionStrategies
                         if (from == null) continue;
 
                         to = cur.Item2.Cross(renderInfo.Ctm);
-                        var extent = to.Subtract(from);
-                        if (extent[0] >= 0)
+
+                        if (from[0] == to[0] && from[1] < to[1]
+                            || from[1] == to[1] && from[0] < to[0])
                         {
                             Lines.Add(new LineSegment(new Vector(FixAxis(from[0]), FixAxis(from[1]), 1)
                                 , new Vector(FixAxis(to[0]), FixAxis(to[1]), 1)));
                         }
-                        else
+                        else if (from[0] == to[0] && from[1] > to[1]
+                            || from[1] == to[1] && from[0] > to[0])
                         {
                             Lines.Add(new LineSegment(new Vector(FixAxis(to[0]), FixAxis(to[1]), 1)
                                 , new Vector(FixAxis(from[0]), FixAxis(from[1]), 1)));
                         }
+                        else
+                        {
+                            throw new Exception("oblique line");
+                        }
+
+                        Debug.WriteLine("x:{0},y:{1}", Lines[Lines.Count - 1].GetStartPoint()[0], Lines[Lines.Count - 1].GetStartPoint()[1]);
                         from = null;
                         to = null;
                     }
@@ -117,30 +125,16 @@ namespace PdfExtractionStrategies
 
         public virtual IEnumerable<PdfTableCell> GetTables()
         {
-            /// by-products for simple table generation, if for complex tables,
-            /// refer to <c>Lines</c> & <c>Rects</c> to re-gen
-            var points = new List<PointF>();
-            foreach (var line in Lines)
-            {
-                points.Add(new PointF(line.GetStartPoint()[0], line.GetStartPoint()[1]));
-                points.Add(new PointF(line.GetEndPoint()[0], line.GetEndPoint()[1]));
-            }
-            foreach (var rect in Rects)
-            {
-                points.Add(new PointF(rect.Left, rect.Bottom));
-                points.Add(new PointF(rect.Left, rect.Bottom - rect.Height));
-                points.Add(new PointF(rect.Left + rect.Width, rect.Bottom));
-                points.Add(new PointF(rect.Left + rect.Width, rect.Bottom - rect.Height));
-            }
+            var points = GetAllInPoints();
             // Threshold
             points = points.Select(p =>
             {
                 return new PointF((float)Math.Round(p.X, 2), (float)Math.Round(p.Y, 2));
             }).ToList();
             // Sort
-            points = points.GroupBy(p => p.X.ToString() + p.Y.ToString())
-                .Select(p => p.First())
-                .ToList();
+            //points = points.GroupBy(p => p.X.ToString() + p.Y.ToString())
+            //    .Select(p => p.First())
+            //    .ToList();
             points.Sort((p1, p2) => p1.Y == p2.Y ? (int)(p1.X - p2.X) : (int)(p2.Y - p1.Y));
 
             points.ForEach(p =>
@@ -187,78 +181,41 @@ namespace PdfExtractionStrategies
                 points.Add(new PointF(rect.Right, rect.Top));
             }
 
-            //var lines = GetAllInLines();
-            //for (int i = 0; i < lines.Count - 1; i++)
-            //{
-            //    for (int j = i + 1; j < lines.Count; j++)
-            //    {
-            //        // 1:vertical, 0:horiztonal
-            //        var lineTypei = lines[i].GetStartPoint()[0] == lines[i].GetEndPoint()[0] ? 1 : 0;
-            //        var lineTypej = lines[j].GetStartPoint()[0] == lines[j].GetEndPoint()[0] ? 1 : 0;
-            //        if (lineTypei == lineTypej) continue;
-            //        else {
-            //            var vx = lineTypei == 1 ? lines[i].GetStartPoint()[0] : lines[j].GetStartPoint()[0];
-            //            var vy = lineTypei == 0 ? lines[i].GetStartPoint()[1] : lines[j].GetStartPoint()[1];
-
-            //            if (lineTypei == 1)
-            //            {
-            //                if ((lines[j].GetStartPoint()[0] + lines[j].GetEndPoint()[0]) / 2 > vx
-            //                    && (lines[i].GetStartPoint()[1] + lines[i].GetEndPoint()[1]) / 2 > vy)
-            //                {
-            //                    points.Add(new PointF(vx, vy));
-            //                }
-            //            }
-            //            else
-            //            {
-            //                if ((lines[i].GetStartPoint()[0] + lines[i].GetEndPoint()[0]) / 2 > vx
-            //                    && (lines[j].GetStartPoint()[1] + lines[j].GetEndPoint()[1]) / 2 > vy)
-            //                {
-            //                    points.Add(new PointF(vx, vy));
-            //                }
-            //            }
-            //        }
-            //    }
-            //}
-
-            return points;
-        }
-
-        // Helper methods
-        public string GetSimpleHTMLTable(PdfTableCell table)
-        {
-            var sb = new StringBuilder();
-
-            sb.Append("<table>");
-            for (int i = 0; i < table.Rows; i++)
+            var lines = GetAllInLines();
+            for (int i = 0; i < lines.Count - 1; i++)
             {
-                sb.Append("<tr>");
-                for (int j = 0; j < table.Cols; j++)
+                for (int j = i + 1; j < lines.Count; j++)
                 {
-                    sb.Append("<td>");
-                    if (table.Children.Count == 0)
-                    {
-                        sb.Append(table.Text);
-                    }
-                    else
-                    {
-                        var cell = table.Children[i * table.Cols + j];
-                        if (cell.Children.Count == 0)
+                    // 1:vertical, 0:horiztonal
+                    var lineTypei = lines[i].GetStartPoint()[0] == lines[i].GetEndPoint()[0] ? 1 : 0;
+                    var lineTypej = lines[j].GetStartPoint()[0] == lines[j].GetEndPoint()[0] ? 1 : 0;
+                    if (lineTypei == lineTypej) continue;
+                    else {
+                        var vx = lineTypei == 1 ? lines[i].GetStartPoint()[0] : lines[j].GetStartPoint()[0];
+                        var vy = lineTypei == 0 ? lines[i].GetStartPoint()[1] : lines[j].GetStartPoint()[1];
+
+                        if (lineTypei == 1)
                         {
-                            sb.Append(cell.Text);
+                            if (vx > lines[j].GetStartPoint()[0] && vx < lines[j].GetEndPoint()[0]
+                                && vy > lines[i].GetStartPoint()[1] && vy < lines[i].GetEndPoint()[1])
+                            {
+                                points.Add(new PointF(vx, vy));
+                            }
                         }
                         else
                         {
-                            sb.Append(GetSimpleHTMLTable(cell));
+                            if (vx > lines[i].GetStartPoint()[0] && vx < lines[i].GetEndPoint()[0]
+                                && vy > lines[j].GetStartPoint()[1] && vy < lines[j].GetEndPoint()[1])
+                            {
+                                points.Add(new PointF(vx, vy));
+                            }
                         }
                     }
-
-                    sb.Append("</td>");
                 }
-                sb.Append("</tr>");
             }
-            sb.Append("</table>");
 
-            return sb.ToString();
+            points.Distinct(new PointFEqualityComparer());
+            return points;
         }
 
         private float FixAxis(float o)
@@ -273,7 +230,6 @@ namespace PdfExtractionStrategies
             var cur = new List<PointF>();
             foreach (var p in points)
             {
-                Debug.WriteLine("x:{0},y:{1}", p.X, p.Y);
                 int i;
                 for (i = 0; i < pGroups.Count; i++)
                 {
@@ -347,6 +303,8 @@ namespace PdfExtractionStrategies
 
         private PdfTableCell MakeTable(List<Rectangle> rects)
         {
+            if (rects == null || rects.Count == 0) return null;
+
             var cell = new PdfTableCell();
             var x = rects[0].Left;
             var y = rects[0].Top;
@@ -409,8 +367,11 @@ namespace PdfExtractionStrategies
                         var innerRects = rects.Where(r => r.Left >= ix && r.Right <= ix + iw
                             && r.Top <= iy && r.Bottom >= iy - ih)
                             .ToList();
-                        var innerCell = MakeTable(innerRects);
-                        cell.Children.Add(innerCell);
+                        if (innerRects.Count > 0)
+                        {
+                            var innerCell = MakeTable(innerRects);
+                            cell.Children.Add(innerCell);
+                        }
                     }
                 }
             }
@@ -420,6 +381,19 @@ namespace PdfExtractionStrategies
             }
 
             return cell;
+        }
+    }
+
+    public class PointFEqualityComparer : IEqualityComparer<PointF>
+    {
+        public bool Equals(PointF x, PointF y)
+        {
+            return x.X == y.X && x.Y == y.Y;
+        }
+
+        public int GetHashCode(PointF obj)
+        {
+            return (int)obj.X ^ (int)obj.Y;
         }
     }
 

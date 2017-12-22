@@ -71,7 +71,7 @@ namespace PdfExtractionStrategies
             }
         }
 
-        public Bitmap DrawContour(int page, string pathToPdf)
+        public Bitmap DrawContours(int page, string pathToPdf)
         {
             using (var reader = new PdfReader(pathToPdf))
             {
@@ -101,6 +101,8 @@ namespace PdfExtractionStrategies
 
         private string GetSimpleHTMLTable(PdfTableCell table)
         {
+            if (table == null) return null;
+
             var sb = new StringBuilder();
 
             sb.Append("<table>");
@@ -135,5 +137,6 @@ namespace PdfExtractionStrategies
 
             return sb.ToString();
         }
+
     }
 }
