@@ -59,3 +59,7 @@ Sample Code:
             return sb.ToString();
         }
 ~~~~
+
+## Nuget:
+
+Install-Package PdfExtractionStrategies -Version 1.0.1
