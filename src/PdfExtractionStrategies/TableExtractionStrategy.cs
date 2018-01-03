@@ -29,7 +29,7 @@ namespace PdfExtractionStrategies
         public List<LineSegment> Lines { get; set; } = new List<LineSegment>();
         public List<Rect> Rects { get; set; } = new List<Rect>();
 
-        public int MaxHierarchy { get; set; } = 5;
+        public int MaxHierarchy { get; set; } = 10;
         public int Gap { get; set; } = 2;
 
         public void ClipPath(int rule)
@@ -92,7 +92,7 @@ namespace PdfExtractionStrategies
                         }
                         else
                         {
-                            throw new Exception("oblique line");
+                            //throw new Exception("oblique line");
                         }
 
                         //Debug.WriteLine("x:{0},y:{1}", Lines[Lines.Count - 1].GetStartPoint()[0], Lines[Lines.Count - 1].GetStartPoint()[1]);
@@ -128,8 +128,8 @@ namespace PdfExtractionStrategies
 
         public virtual IEnumerable<PdfTableCell> GetTables()
         {
-            // remove some lines
-            RemoveLines();
+            // remove strikethroughs
+            RemoveStrikethroughs();
 
             var points = GetAllInPoints();
             points.ForEach(p =>
@@ -145,7 +145,7 @@ namespace PdfExtractionStrategies
             }
         }
 
-        public void RemoveLines()
+        public void RemoveStrikethroughs()
         {
             var hLines = Lines.Where(l => NearlyEqual(l.GetStartPoint()[1], l.GetEndPoint()[1])).ToList();
             //hLines.Sort((l1, l2) => (int)(l1.GetStartPoint()[1] - l2.GetStartPoint()[1]));
@@ -346,8 +346,13 @@ namespace PdfExtractionStrategies
                 var uly = points[ulIdx].Y;
 
                 urIdx = ulIdx + 1;
-                while (urIdx < points.Count - 2 && !madeRect)
+                while (!madeRect)
                 {
+                    if (urIdx >= points.Count - 2)
+                    {
+                        goto end;
+                    }
+
                     // Found upper right point
                     if (points[ulIdx].X < points[urIdx].X
                         && points[ulIdx].Y == points[urIdx].Y)
@@ -362,7 +367,8 @@ namespace PdfExtractionStrategies
                             if (llIdx == points.Count - 1)
                             {
                                 // reach the last line, jump out
-                                goto end;
+                                //goto end;
+                                break;
                             }
 
                             // Found lower left point
@@ -441,8 +447,8 @@ namespace PdfExtractionStrategies
             }
 
             cell.Children = new List<PdfTableCell>();
-            //if (rects.Count > 1 && level < MaxHierarchy)
-            if (rects.Count > 1)
+            if (rects.Count > 1 && level < MaxHierarchy)
+            //if (rects.Count > 1)
             {
                 for (int j = 0; j < cell.Rows; j++)
                 {
@@ -482,7 +488,7 @@ namespace PdfExtractionStrategies
                         }).ToList();
                         if (innerRects.Count > 0)
                         {
-                            var innerCell = MakeTable(innerRects, ++level);
+                            var innerCell = MakeTable(innerRects, level + 1);
                             cell.Children.Add(innerCell);
                         }
                     }
