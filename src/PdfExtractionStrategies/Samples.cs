@@ -118,14 +118,24 @@ namespace PdfExtractionStrategies
                     }
                     else
                     {
-                        var cell = table.Children[i * table.Cols + j];
-                        if (cell.Children.Count == 0)
+                        var idx = i * table.Cols + j;
+                        if (idx < table.Children.Count)
                         {
-                            sb.Append(cell.Text);
+                            var cell = table.Children[idx];
+                            if (cell.Children.Count == 0)
+                            {
+                                sb.Append(cell.Text);
+                            }
+                            else
+                            {
+                                sb.Append(GetSimpleHTMLTable(cell));
+                            }
                         }
                         else
                         {
-                            sb.Append(GetSimpleHTMLTable(cell));
+                            throw new Exception("bad format");
+                            // the table is in bad format
+                            // which the extraction should having a bug
                         }
                     }
 

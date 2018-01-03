@@ -29,6 +29,9 @@ namespace PdfExtractionStrategies
         public List<LineSegment> Lines { get; set; } = new List<LineSegment>();
         public List<Rect> Rects { get; set; } = new List<Rect>();
 
+        public int MaxHierarchy { get; set; } = 5;
+        public int Gap { get; set; } = 2;
+
         public void ClipPath(int rule)
         {
 
@@ -92,7 +95,7 @@ namespace PdfExtractionStrategies
                             throw new Exception("oblique line");
                         }
 
-                        Debug.WriteLine("x:{0},y:{1}", Lines[Lines.Count - 1].GetStartPoint()[0], Lines[Lines.Count - 1].GetStartPoint()[1]);
+                        //Debug.WriteLine("x:{0},y:{1}", Lines[Lines.Count - 1].GetStartPoint()[0], Lines[Lines.Count - 1].GetStartPoint()[1]);
                         from = null;
                         to = null;
                     }
@@ -125,21 +128,13 @@ namespace PdfExtractionStrategies
 
         public virtual IEnumerable<PdfTableCell> GetTables()
         {
-            var points = GetAllInPoints();
-            // Threshold
-            points = points.Select(p =>
-            {
-                return new PointF((float)Math.Round(p.X, 2), (float)Math.Round(p.Y, 2));
-            }).ToList();
-            // Sort
-            //points = points.GroupBy(p => p.X.ToString() + p.Y.ToString())
-            //    .Select(p => p.First())
-            //    .ToList();
-            points.Sort((p1, p2) => p1.Y == p2.Y ? (int)(p1.X - p2.X) : (int)(p2.Y - p1.Y));
+            // remove some lines
+            RemoveLines();
 
+            var points = GetAllInPoints();
             points.ForEach(p =>
             {
-                Debug.WriteLine("x:{0},y:{1}", p.X, p.Y);
+                //Debug.WriteLine("x:{0},y:{1}", p.X, p.Y);
             });
 
             var pGroups = MakePointsGroupInTable(points);
@@ -148,6 +143,39 @@ namespace PdfExtractionStrategies
                 var rects = MakeRectangles(g);
                 yield return MakeTable(rects);
             }
+        }
+
+        public void RemoveLines()
+        {
+            var hLines = Lines.Where(l => NearlyEqual(l.GetStartPoint()[1], l.GetEndPoint()[1])).ToList();
+            //hLines.Sort((l1, l2) => (int)(l1.GetStartPoint()[1] - l2.GetStartPoint()[1]));
+            var hs = new List<float>();
+            foreach (var hl in hLines)
+            {
+                int i = 0;
+                for (i = 0; i < hs.Count; i++)
+                {
+                    if (NearlyEqual(hs[i], hl.GetStartPoint()[1]))
+                        break;
+                }
+                if (i == hs.Count)
+                {
+                    hs.Add(hl.GetStartPoint()[1]);
+                }
+            }
+            hs.Sort();
+            var deleteYs = new List<float>();
+            for (int i = 0; i < hs.Count - 1; i++)
+            {
+                if (NearlyEqual(hs[i + 1], hs[i], 10))
+                    deleteYs.Add(hs[i]);
+            }
+            Lines = Lines.Where(l => !deleteYs.Contains(l.GetStartPoint()[1])).ToList();
+        }
+
+        private bool NearlyEqual(float x1, float x2, float diff = 0)
+        {
+            return x1 == x2 || Math.Abs(x1 - x2) < Gap + diff;
         }
 
         public List<LineSegment> GetAllInLines()
@@ -163,6 +191,16 @@ namespace PdfExtractionStrategies
             }
 
             return lines;
+        }
+
+        private void AddToPoints(List<PointF> points, PointF p)
+        {
+            for (int i = 0; i < points.Count; i++)
+            {
+                if (Math.Abs(points[i].X - p.X) < Gap && Math.Abs(points[i].Y - p.Y) < Gap)
+                    return;
+            }
+            points.Add(p);
         }
 
         public List<PointF> GetAllInPoints()
@@ -214,8 +252,49 @@ namespace PdfExtractionStrategies
                 }
             }
 
-            points.Distinct(new PointFEqualityComparer());
-            return points;
+            // fix points
+            var gap = 2;
+            var xs = new List<float>();
+            var ys = new List<float>();
+            var nPoints = new List<PointF>();
+            for (int i = 0; i < points.Count; i++)
+            {
+                var nx = points[i].X;
+                var ny = points[i].Y;
+
+                int m = 0;
+                int n = 0;
+                for (m = 0; m < xs.Count; m++)
+                {
+                    var x = xs[m];
+                    if (x == nx) break;
+                    else if (Math.Abs(x - nx) < gap)
+                    {
+                        nx = x;
+                        break;
+                    }
+                }
+                if (m == xs.Count) xs.Add(nx);
+
+                for (n = 0; n < ys.Count; n++)
+                {
+                    var y = ys[n];
+                    if (y == ny) break;
+                    else if (Math.Abs(y - ny) < gap)
+                    {
+                        ny = y;
+                        break;
+                    }
+                }
+                if (n == ys.Count) ys.Add(ny);
+
+
+                nPoints.Add(new PointF(nx, ny));
+            }
+
+            nPoints.Distinct(new PointFEqualityComparer());
+            nPoints.Sort((p1, p2) => p1.Y == p2.Y ? (int)(p1.X - p2.X) : (int)(p2.Y - p1.Y));
+            return nPoints;
         }
 
         private float FixAxis(float o)
@@ -223,7 +302,7 @@ namespace PdfExtractionStrategies
             return (float)Math.Round(o, 2);
         }
 
-        private List<List<PointF>> MakePointsGroupInTable(List<PointF> points)
+        public List<List<PointF>> MakePointsGroupInTable(List<PointF> points)
         {
             var pGroups = new List<List<PointF>>();
 
@@ -236,7 +315,8 @@ namespace PdfExtractionStrategies
                     var g = pGroups[i];
                     if (!g.Find(pf => pf.X == p.X || pf.Y == p.Y).IsEmpty)
                     {
-                        g.Add(p);
+                        if (g.Find(pf => pf.X == p.X && pf.Y == p.Y).IsEmpty)
+                            g.Add(p);
                         break;
                     }
                 }
@@ -253,55 +333,79 @@ namespace PdfExtractionStrategies
         {
             var rects = new List<Rectangle>();
             // a bug here, need dect if two points are lined
-            var ulx = points[0].X;
-            var uly = points[0].Y;
-            for (int i = 0; i < points.Count - 1; i++)
+            // can use 2.pdf/page 2 test, see middle header
+            var ulIdx = 0;
+            var urIdx = 0;
+            var llIdx = 0;
+            var lrIdx = 0;
+
+            while (ulIdx < points.Count - 3)
             {
-                var urx = points[i + 1].X;
-                var ury = points[i + 1].Y;
-                if (urx > ulx && ury == uly)
+                var madeRect = false;
+                var ulx = points[ulIdx].X;
+                var uly = points[ulIdx].Y;
+
+                urIdx = ulIdx + 1;
+                while (urIdx < points.Count - 2 && !madeRect)
                 {
-
-                    float llx;
-                    float lly;
-                    float lrx;
-                    float lry;
-
-                    var llIdx = i;
-                    while (llIdx < points.Count - 1)
+                    // Found upper right point
+                    if (points[ulIdx].X < points[urIdx].X
+                        && points[ulIdx].Y == points[urIdx].Y)
                     {
-                        llIdx = points.FindIndex(llIdx + 1, pf => pf.X == ulx);
-                        if (llIdx == -1) break;
-
-                        var lrIdx = llIdx + 1;
-                        while (lrIdx < points.Count)
+                        var urx = points[urIdx].X;
+                        var ury = points[urIdx].Y;
+                        llIdx = urIdx + 1;
+                        while (llIdx < points.Count - 1 && !madeRect)
                         {
-                            if (points[lrIdx].Y != points[llIdx].Y || points[lrIdx].X != urx)
+                            while (points[llIdx].X != ulx && llIdx < points.Count - 1) llIdx++;
+
+                            if (llIdx == points.Count - 1)
+                            {
+                                // reach the last line, jump out
+                                goto end;
+                            }
+
+                            // Found lower left point
+                            var llx = points[llIdx].X;
+                            var lly = points[llIdx].Y;
+                            lrIdx = llIdx + 1;
+                            while (lrIdx < points.Count)
+                            {
+                                if (points[lrIdx].X == urx && points[lrIdx].Y == lly)
+                                {
+                                    // Found lower right point
+                                    madeRect = true;
+                                    rects.Add(new Rectangle(llx, lly, urx, ury));
+                                    ulIdx = urIdx;
+                                    break;
+                                }
+
                                 lrIdx++;
-                            else break;
-                        }
-                        if (lrIdx < points.Count)
-                        {
-                            llx = points[llIdx].X;
-                            lly = points[llIdx].Y;
-                            lrx = points[llIdx + 1].X;
-                            lry = points[llIdx + 1].Y;
+                            }
 
-                            rects.Add(new Rectangle(llx, lly, urx, ury));
-                            break;
+                            if (madeRect) break;
+                            else llIdx++;
                         }
 
                     }
+                    else
+                    {
+                        // Switch row
+                        ulIdx = urIdx;
+                        break;
+                    }
+
+                    urIdx++;
                 }
 
-                ulx = urx;
-                uly = ury;
+                // here madeRect must true
             }
 
+            end:
             return rects;
         }
 
-        private PdfTableCell MakeTable(List<Rectangle> rects)
+        private PdfTableCell MakeTable(List<Rectangle> rects, int level = 0)
         {
             if (rects == null || rects.Count == 0) return null;
 
@@ -318,7 +422,7 @@ namespace PdfExtractionStrategies
             cell.Xs.Add(x);
             while (x < maxX)
             {
-                var rs = rects.Where(r => r.Left == x);
+                var rs = rects.Where(r => r.Left == x).ToList();
                 if (rs.Count() == 0) break;
                 x += rs.Max(r => r.Width);
                 if (x < cell.Rectangle.Right)
@@ -337,6 +441,7 @@ namespace PdfExtractionStrategies
             }
 
             cell.Children = new List<PdfTableCell>();
+            //if (rects.Count > 1 && level < MaxHierarchy)
             if (rects.Count > 1)
             {
                 for (int j = 0; j < cell.Rows; j++)
@@ -364,12 +469,20 @@ namespace PdfExtractionStrategies
                             ih = iy - cell.Ys[j + 1];
                         }
 
-                        var innerRects = rects.Where(r => r.Left >= ix && r.Right <= ix + iw
-                            && r.Top <= iy && r.Bottom >= iy - ih)
-                            .ToList();
+                        //var innerRects = rects.Where(r => r.Left >= ix && r.Right <= ix + iw
+                        //    && r.Top <= iy && r.Bottom >= iy - ih)
+                        //    .ToList();
+
+                        var innerRects = rects.Where(r => {
+                            return
+                            (r.Left > ix || NearlyEqual(r.Left, ix))
+                            && (r.Right < ix + iw || NearlyEqual(r.Right, ix + iw))
+                            && (r.Top < iy || NearlyEqual(r.Top, iy))
+                            && (r.Bottom > iy - ih || NearlyEqual(r.Bottom, iy - ih));
+                        }).ToList();
                         if (innerRects.Count > 0)
                         {
-                            var innerCell = MakeTable(innerRects);
+                            var innerCell = MakeTable(innerRects, ++level);
                             cell.Children.Add(innerCell);
                         }
                     }
