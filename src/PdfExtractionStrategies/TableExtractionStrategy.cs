@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using System.util;
@@ -31,6 +32,12 @@ namespace PdfExtractionStrategies
 
         public int MaxHierarchy { get; set; } = 10;
         public int Gap { get; set; } = 2;
+        public int Rotation { get; set; } = 0;
+
+        public TableExtractionStrategy(int rotation = 0)
+        {
+            Rotation = rotation;
+        }
 
         public void ClipPath(int rule)
         {
@@ -61,6 +68,11 @@ namespace PdfExtractionStrategies
 
         public Path RenderPath(PathPaintingRenderInfo renderInfo)
         {
+            //var p = typeof(PathPaintingRenderInfo).GetField("gs", BindingFlags.NonPublic | BindingFlags.Instance);
+            //var gs = (GraphicsState)(p.GetValue(renderInfo));
+            //Debug.WriteLine(gs.StrokeColor?.RGB.ToString()??"empty");
+            // detect gs.StrokeColor != null
+
             if (renderInfo.Operation != 0)
             {
                 Tuple<int, Vector> cur = null;
@@ -100,27 +112,27 @@ namespace PdfExtractionStrategies
                         to = null;
                     }
                 }
-            }
 
-            if (rData != null)
-            {
-                var r = rData;
-                Vector vxy = new Vector(r[0], r[1], 1).Cross(renderInfo.Ctm);
-                Vector vwh = new Vector(r[2], r[3], 1).Cross(renderInfo.Ctm);
-                var x = vxy[0];
-                var y = vxy[1];
-                if (vwh[0] < 0)
+                if (rData != null)
                 {
-                    x = vxy[0] + vwh[0];
+                    var r = rData;
+                    Vector vxy = new Vector(r[0], r[1], 1).Cross(renderInfo.Ctm);
+                    Vector vwh = new Vector(r[2], r[3], 1).Cross(renderInfo.Ctm);
+                    var x = vxy[0];
+                    var y = vxy[1];
+                    if (vwh[0] < 0)
+                    {
+                        x = vxy[0] + vwh[0];
+                    }
+                    if (vwh[1] < 0)
+                    {
+                        y = vxy[1] - vwh[1];
+                    }
+                    vxy = new Vector(x, y, 1);
+                    vwh = new Vector(Math.Abs(r[2]), Math.Abs(r[3]), 1).Cross(renderInfo.Ctm);
+                    Rects.Add(new Rect(vxy[0], vxy[1], vwh[0], vwh[1]));
+                    rData = null;
                 }
-                if (vwh[1] < 0)
-                {
-                    y = vxy[1] - vwh[1];
-                }
-                vxy = new Vector(x, y, 1);
-                vwh = new Vector(Math.Abs(r[2]), Math.Abs(r[3]), 1).Cross(renderInfo.Ctm);
-                Rects.Add(new Rect(vxy[0], vxy[1], vwh[0], vwh[1]));
-                rData = null;
             }
 
             return null;
@@ -415,7 +427,7 @@ namespace PdfExtractionStrategies
         {
             if (rects == null || rects.Count == 0) return null;
 
-            var cell = new PdfTableCell();
+            var cell = new PdfTableCell(Rotation);
             var x = rects[0].Left;
             var y = rects[0].Top;
             var maxX = rects.Max(r => r.Left);
@@ -450,15 +462,15 @@ namespace PdfExtractionStrategies
             if (rects.Count > 1 && level < MaxHierarchy)
             //if (rects.Count > 1)
             {
-                for (int j = 0; j < cell.Rows; j++)
+                for (int j = 0; j < cell.RealRows; j++)
                 {
-                    for (int i = 0; i < cell.Cols; i++)
+                    for (int i = 0; i < cell.RealCols; i++)
                     {
                         var ix = cell.Xs[i];
                         var iy = cell.Ys[j];
                         var iw = 0f;
                         var ih = 0f;
-                        if (i == cell.Cols - 1)
+                        if (i == cell.RealCols - 1)
                         {
                             iw = cell.Rectangle.Right - ix;
                         }
@@ -466,7 +478,7 @@ namespace PdfExtractionStrategies
                         {
                             iw = cell.Xs[i + 1] - ix;
                         }
-                        if (j == cell.Rows - 1)
+                        if (j == cell.RealRows - 1)
                         {
                             ih = iy - cell.Rectangle.Bottom;
                         }
@@ -479,7 +491,8 @@ namespace PdfExtractionStrategies
                         //    && r.Top <= iy && r.Bottom >= iy - ih)
                         //    .ToList();
 
-                        var innerRects = rects.Where(r => {
+                        var innerRects = rects.Where(r =>
+                        {
                             return
                             (r.Left > ix || NearlyEqual(r.Left, ix))
                             && (r.Right < ix + iw || NearlyEqual(r.Right, ix + iw))
@@ -496,7 +509,7 @@ namespace PdfExtractionStrategies
             }
             else
             {
-                cell.Text = GetResultantText(new RectangleSection(cell.Rectangle));
+                cell.Text = GetResultantText(new RectangleSection(cell.Rectangle, Gap));
             }
 
             return cell;
@@ -520,9 +533,9 @@ namespace PdfExtractionStrategies
     {
         public Rectangle Rect { get; set; }
 
-        public RectangleSection(Rectangle rect)
+        public RectangleSection(Rectangle rect, int gap = 0)
         {
-            Rect = rect;
+            Rect = new Rectangle(rect.Left - gap, rect.Bottom - gap, rect.Right + gap, rect.Top + gap);
         }
 
         public bool Accept(LocationTextExtractionStrategy.TextChunk textChunk)
@@ -535,18 +548,62 @@ namespace PdfExtractionStrategies
 
     public class PdfTableCell
     {
-        public int Rows { get { return Ys.Count; } }
+        public PdfTableCell(int rotation = 0)
+        {
+            Rotation = rotation;
+            Xs = new List<float>();
+            Ys = new List<float>();
+        }
 
-        public int Cols { get { return Xs.Count; } }
+        public int Rotation { get; }
 
-        public List<float> Xs { get; set; } = new List<float>();
+        public int RealRows { get { return Ys.Count; } }
+        public int RealCols { get { return Xs.Count; } }
 
-        public List<float> Ys { get; set; } = new List<float>();
+        public int Rows
+        {
+            get
+            {
+                if (Rotation == 90)
+                    return Xs.Count;
+                return Ys.Count;
+            }
+        }
+
+        public int Cols
+        {
+            get
+            {
+                if (Rotation == 90)
+                    return Ys.Count;
+                return Xs.Count;
+            }
+        }
+
+        public List<float> Xs { get; set; }
+
+        public List<float> Ys { get; set; }
 
         public List<PdfTableCell> Children { get; set; } = new List<PdfTableCell>();
 
         public Rectangle Rectangle { get; set; }
 
         public string Text { get; set; }
+
+        public PdfTableCell Get(int row, int col)
+        {
+            if (Rotation == 0)
+            {
+                return Children[row * Cols + col];
+            }
+            else if (Rotation == 90)
+            {
+                return Children[(Cols - 1 - col) * Rows + row];
+            }
+            else
+            {
+                throw new NotImplementedException();
+            }
+        }
     }
 }
