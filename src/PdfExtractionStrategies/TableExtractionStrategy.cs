@@ -31,12 +31,16 @@ namespace PdfExtractionStrategies
         public List<Rect> Rects { get; set; } = new List<Rect>();
 
         public int MaxHierarchy { get; set; } = 10;
-        public int Gap { get; set; } = 2;
+        public int Variance { get; set; } = 2;
         public int Rotation { get; set; } = 0;
+        public bool TreatSmallRectAsLine { get; set; }
+        public bool DetectStrikeThroughs { get; set; }
 
-        public TableExtractionStrategy(int rotation = 0)
+        public TableExtractionStrategy(int rotation = 0, bool treatSmallRectAsLine = true, bool detectStrikeThroughs = true)
         {
             Rotation = rotation;
+            TreatSmallRectAsLine = treatSmallRectAsLine;
+            DetectStrikeThroughs = detectStrikeThroughs;
         }
 
         public void ClipPath(int rule)
@@ -130,7 +134,22 @@ namespace PdfExtractionStrategies
                     }
                     vxy = new Vector(x, y, 1);
                     vwh = new Vector(Math.Abs(r[2]), Math.Abs(r[3]), 1).Cross(renderInfo.Ctm);
-                    Rects.Add(new Rect(vxy[0], vxy[1], vwh[0], vwh[1]));
+                    if (TreatSmallRectAsLine && vwh[0] < Variance)
+                    {
+                        //Lines.Add(new LineSegment(new Vector(FixAxis(x), FixAxis(y - vwh[1]), 1)
+                        //       , new Vector(FixAxis(x), FixAxis(y), 1)));
+                        Lines.Add(new LineSegment(new Vector(FixAxis(x), FixAxis(y), 1)
+                               , new Vector(FixAxis(x), FixAxis(y + vwh[1]), 1)));
+                    }
+                    else if (TreatSmallRectAsLine && vwh[1] < Variance)
+                    {
+                        Lines.Add(new LineSegment(new Vector(FixAxis(x), FixAxis(y), 1)
+                               , new Vector(FixAxis(x + vwh[0]), FixAxis(y), 1)));
+                    }
+                    else
+                    {
+                        Rects.Add(new Rect(vxy[0], vxy[1], vwh[0], vwh[1]));
+                    }
                     rData = null;
                 }
             }
@@ -142,13 +161,7 @@ namespace PdfExtractionStrategies
         {
             // remove strikethroughs
             RemoveStrikethroughs();
-
             var points = GetAllInPoints();
-            points.ForEach(p =>
-            {
-                //Debug.WriteLine("x:{0},y:{1}", p.X, p.Y);
-            });
-
             var pGroups = MakePointsGroupInTable(points);
             foreach (var g in pGroups)
             {
@@ -159,35 +172,73 @@ namespace PdfExtractionStrategies
 
         public void RemoveStrikethroughs()
         {
-            var hLines = Lines.Where(l => NearlyEqual(l.GetStartPoint()[1], l.GetEndPoint()[1])).ToList();
-            //hLines.Sort((l1, l2) => (int)(l1.GetStartPoint()[1] - l2.GetStartPoint()[1]));
+            var mayIndex = Rotation == 0 ? 1 : 0;
+            var hlines = Lines.Where(l => NearlyEqual(l.GetStartPoint()[mayIndex], l.GetEndPoint()[mayIndex])).ToList();
             var hs = new List<float>();
-            foreach (var hl in hLines)
+            foreach (var hl in hlines)
             {
                 int i = 0;
                 for (i = 0; i < hs.Count; i++)
                 {
-                    if (NearlyEqual(hs[i], hl.GetStartPoint()[1]))
+                    if (NearlyEqual(hs[i], hl.GetStartPoint()[mayIndex]))
                         break;
                 }
                 if (i == hs.Count)
                 {
-                    hs.Add(hl.GetStartPoint()[1]);
+                    hs.Add(hl.GetStartPoint()[mayIndex]);
                 }
             }
             hs.Sort();
-            var deleteYs = new List<float>();
+
+            var deltas = new List<float>();
+            var deltaGroup = new List<Tuple<float, int>>();
             for (int i = 0; i < hs.Count - 1; i++)
             {
-                if (NearlyEqual(hs[i + 1], hs[i], 10))
-                    deleteYs.Add(hs[i]);
+                deltas.Add(hs[i + 1] - hs[i]);
             }
-            Lines = Lines.Where(l => !deleteYs.Contains(l.GetStartPoint()[1])).ToList();
+            foreach (var d in deltas)
+            {
+                int j = 0;
+                for (; j < deltaGroup.Count; j++)
+                {
+                    var avg = deltaGroup[j].Item1;
+                    var count = deltaGroup[j].Item2;
+                    if (NearlyEqual(d, avg, variance: 0.5f))
+                    {
+                        avg = (avg + d) / 2;
+                        deltaGroup[j] = Tuple.Create(avg, ++count);
+                    }
+                }
+                if (j == deltaGroup.Count)
+                {
+                    deltaGroup.Add(Tuple.Create(d, 1));
+                }
+            }
+            var theRightDeltaItem = deltaGroup.OrderByDescending(d => d.Item2).FirstOrDefault();
+            // over 4 strikethroughs and interleave is less than 12px
+            if (theRightDeltaItem != null && theRightDeltaItem.Item1 < 12 && theRightDeltaItem.Item2 > 4)
+            {
+                var theRightDelta = theRightDeltaItem.Item1;
+                var deleteYs = new List<float>();
+                for (int i = 1; i < hs.Count - 2; i++)
+                {
+                    if (NearlyEqual(hs[i + 1], hs[i], theRightDelta, 0.5f))
+                    {
+                        deleteYs.Add(hs[i]);
+                        deleteYs.Add(hs[i + 1]);
+                    }
+                }
+                deleteYs.Distinct();
+                Lines = Lines.Where(l => !deleteYs.Contains(l.GetStartPoint()[mayIndex]) || !hlines.Contains(l)).ToList();
+            }
         }
 
-        private bool NearlyEqual(float x1, float x2, float diff = 0)
+        private bool NearlyEqual(float x1, float x2, float diff = 0, float variance = 0)
         {
-            return x1 == x2 || Math.Abs(x1 - x2) < Gap + diff;
+            if (variance == 0)
+                return x1 == x2 || Math.Abs(Math.Abs(x1 - x2) - diff) < Variance;
+            else
+                return x1 == x2 || Math.Abs(Math.Abs(x1 - x2) - diff) < variance;
         }
 
         public List<LineSegment> GetAllInLines()
@@ -209,7 +260,7 @@ namespace PdfExtractionStrategies
         {
             for (int i = 0; i < points.Count; i++)
             {
-                if (Math.Abs(points[i].X - p.X) < Gap && Math.Abs(points[i].Y - p.Y) < Gap)
+                if (Math.Abs(points[i].X - p.X) < Variance && Math.Abs(points[i].Y - p.Y) < Variance)
                     return;
             }
             points.Add(p);
@@ -265,7 +316,7 @@ namespace PdfExtractionStrategies
             }
 
             // fix points
-            var gap = 2;
+            var variance = 2;
             var xs = new List<float>();
             var ys = new List<float>();
             var nPoints = new List<PointF>();
@@ -280,7 +331,7 @@ namespace PdfExtractionStrategies
                 {
                     var x = xs[m];
                     if (x == nx) break;
-                    else if (Math.Abs(x - nx) < gap)
+                    else if (Math.Abs(x - nx) < variance)
                     {
                         nx = x;
                         break;
@@ -292,7 +343,7 @@ namespace PdfExtractionStrategies
                 {
                     var y = ys[n];
                     if (y == ny) break;
-                    else if (Math.Abs(y - ny) < gap)
+                    else if (Math.Abs(y - ny) < variance)
                     {
                         ny = y;
                         break;
@@ -509,7 +560,7 @@ namespace PdfExtractionStrategies
             }
             else
             {
-                cell.Text = GetResultantText(new RectangleSection(cell.Rectangle, Gap));
+                cell.Text = GetResultantText(new RectangleSection(cell.Rectangle, Variance));
             }
 
             return cell;
@@ -533,9 +584,9 @@ namespace PdfExtractionStrategies
     {
         public Rectangle Rect { get; set; }
 
-        public RectangleSection(Rectangle rect, int gap = 0)
+        public RectangleSection(Rectangle rect, int variance = 0)
         {
-            Rect = new Rectangle(rect.Left - gap, rect.Bottom - gap, rect.Right + gap, rect.Top + gap);
+            Rect = new Rectangle(rect.Left - variance, rect.Bottom - variance, rect.Right + variance, rect.Top + variance);
         }
 
         public bool Accept(LocationTextExtractionStrategy.TextChunk textChunk)
