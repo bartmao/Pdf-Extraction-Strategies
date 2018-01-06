@@ -74,7 +74,7 @@ namespace PdfExtractionStrategies
         {
             //var p = typeof(PathPaintingRenderInfo).GetField("gs", BindingFlags.NonPublic | BindingFlags.Instance);
             //var gs = (GraphicsState)(p.GetValue(renderInfo));
-            //Debug.WriteLine(gs.StrokeColor?.RGB.ToString()??"empty");
+            //Debug.WriteLine(gs.StrokeColor?.RGB.ToString() ?? "empty");
             // detect gs.StrokeColor != null
 
             if (renderInfo.Operation != 0)
@@ -160,7 +160,10 @@ namespace PdfExtractionStrategies
         public virtual IEnumerable<PdfTableCell> GetTables()
         {
             // remove strikethroughs
+            MergeLines();
             RemoveStrikethroughs();
+            //RemoveRepeatedLines();
+
             var points = GetAllInPoints();
             var pGroups = MakePointsGroupInTable(points);
             foreach (var g in pGroups)
@@ -168,6 +171,66 @@ namespace PdfExtractionStrategies
                 var rects = MakeRectangles(g);
                 yield return MakeTable(rects);
             }
+        }
+
+        public void MergeLines()
+        {
+            var hlines = Lines.Where(l => l.GetStartPoint()[1] == l.GetEndPoint()[1]);
+            var vlines = Lines.Where(l => l.GetStartPoint()[0] == l.GetEndPoint()[0]);
+            hlines = hlines.OrderBy(h => h.GetStartPoint()[1]).ThenBy(h => h.GetStartPoint()[0]);
+            vlines = vlines.OrderBy(v => v.GetStartPoint()[0]).ThenBy(v => v.GetStartPoint()[1]);
+
+            var nHlines = new List<LineSegment>();
+            var nVlines = new List<LineSegment>();
+            foreach (var hline in hlines)
+            {
+                if (nHlines.Count == 0) nHlines.Add(hline);
+                else
+                {
+                    var last = nHlines.Last();
+                    // not in same line
+                    if (last.GetStartPoint()[1] < hline.GetStartPoint()[1])
+                    {
+                        nHlines.Add(hline);
+                        continue;
+                    }
+
+                    // contained or overlapped
+                    if (last.GetEndPoint()[0] >= hline.GetStartPoint()[0])
+                    {
+                        var v = last.GetEndPoint()[1] > hline.GetEndPoint()[1] ? last.GetEndPoint() : hline.GetEndPoint();
+                        nHlines[nHlines.Count - 1] = new LineSegment(last.GetStartPoint(), v);
+                    }
+                    else
+                        nHlines.Add(hline);
+                }
+            }
+
+            foreach (var vline in vlines)
+            {
+                if (nVlines.Count == 0) nVlines.Add(vline);
+                else
+                {
+                    var last = nVlines.Last();
+                    if (last.GetStartPoint()[0] < vline.GetStartPoint()[0])
+                    {
+                        nVlines.Add(vline);
+                        continue;
+                    }
+
+                    if (last.GetEndPoint()[1] >= vline.GetStartPoint()[1])
+                    {
+                        var v = last.GetEndPoint()[1] > vline.GetEndPoint()[1] ? last.GetEndPoint() : vline.GetEndPoint();
+                        nVlines[nVlines.Count - 1] = new LineSegment(last.GetStartPoint(), v);
+                    }
+                    else
+                        nVlines.Add(vline);
+                }
+            }
+
+            Lines = new List<LineSegment>();
+            Lines.AddRange(nHlines);
+            Lines.AddRange(nVlines);
         }
 
         public void RemoveStrikethroughs()
@@ -489,23 +552,25 @@ namespace PdfExtractionStrategies
 
             //cols
             cell.Xs.Add(x);
-            while (x < maxX)
+            while (true)
             {
-                var rs = rects.Where(r => r.Left == x).ToList();
+                var rs = rects.Where(r => NearlyEqual(r.Left, x)).ToList();
                 if (rs.Count() == 0) break;
                 x += rs.Max(r => r.Width);
-                if (x < cell.Rectangle.Right)
+                // not arrive the border
+                if (x + Variance < cell.Rectangle.Right)
                     cell.Xs.Add(x);
             }
 
             //rows
             cell.Ys.Add(y);
-            while (y > minY)
+            while (true)
             {
-                var rs = rects.Where(r => r.Top == y);
+                var rs = rects.Where(r => NearlyEqual(r.Top, y)).ToList();
                 if (rs.Count() == 0) break;
-                y -= rs.Max(r => r.Height);
-                if (y > cell.Rectangle.Bottom)
+                y = y - rs.Max(r => r.Height);
+                // not arrive the border
+                if (y - Variance > cell.Rectangle.Bottom)
                     cell.Ys.Add(y);
             }
 
