@@ -62,4 +62,4 @@ Sample Code:
 
 ## Nuget:
 
-Install-Package PdfExtractionStrategies -Version 1.0.1
+Install-Package PdfExtractionStrategies
